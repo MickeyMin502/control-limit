@@ -1,8 +1,9 @@
-# spc_acceptance_visual_v3.py
+# spc_acceptance_app.py
 """
 验收控制线 + 传统SPC控制线 可视化计算器 (Web版)
 修复：均值分布概率密度曲线只显示一半的问题
 采用双Y轴方案，两条曲线均完整显示
+性能优化：添加缓存、减少数据点、修复弃用警告
 """
 
 import streamlit as st
@@ -12,11 +13,17 @@ from scipy.stats import norm
 import math
 import pandas as pd
 
+# 页面配置
 st.set_page_config(page_title="SPC vs 验收控制线", page_icon="📐", layout="wide")
 st.title("📊 SPC 控制线 vs 验收控制线 (动态对比)")
-st.markdown("作者：Mickey Min 版本v1.0 2026-09-11 电话15802128791")
+st.markdown("作者：Mickey Min 版本v1.1 2026-09-17")
 
-# ================= 核心计算函数 =================
+# ================= 中文字体设置 =================
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+
+# ================= 核心计算函数（带缓存） =================
+@st.cache_data
 def calculate_acceptance_limits(usl, lsl, sigma_within, cpk_req, n_prime, z_pa):
     z_1p = 3 * cpk_req
     k_A = z_1p + z_pa / math.sqrt(n_prime)
@@ -25,6 +32,7 @@ def calculate_acceptance_limits(usl, lsl, sigma_within, cpk_req, n_prime, z_pa):
     center = (usl + lsl) / 2
     return {'UCL_A': UCL_A, 'LCL_A': LCL_A, 'k_A': k_A, 'z_1p': z_1p, 'center': center}
 
+@st.cache_data
 def calculate_spc_limits(process_mean, sigma_within, n_subgroup):
     sigma_xbar = sigma_within / np.sqrt(n_subgroup)
     ucl_spc = process_mean + 3 * sigma_xbar
@@ -67,14 +75,12 @@ if usl > lsl and sigma_within > 0:
     ppk_lower = (process_mean - lsl) / (3 * sigma_within)
     ppk = min(ppk_upper, ppk_lower)
     
-    # ================= 概率密度数据 =================
-    # 单值分布
+    # ================= 概率密度数据（减少数据点加快渲染） =================
     x_single = np.linspace(min(lsl, process_mean - 4*sigma_within), 
-                           max(usl, process_mean + 4*sigma_within), 1000)
+                           max(usl, process_mean + 4*sigma_within), 200)
     y_single = norm.pdf(x_single, process_mean, sigma_within)
     
-    # 均值分布 (完整曲线，从0开始)
-    x_mean = np.linspace(process_mean - 5*sigma_xbar, process_mean + 5*sigma_xbar, 1000)
+    x_mean = np.linspace(process_mean - 5*sigma_xbar, process_mean + 5*sigma_xbar, 200)
     y_mean = norm.pdf(x_mean, process_mean, sigma_xbar)
     
     # ================= 绘图 =================
@@ -104,11 +110,11 @@ if usl > lsl and sigma_within > 0:
         yaxis='y1'
     ))
     
-    # ---- 传统 SPC 控制线 (蓝色虚线，基于均值分布) ----
+    # ---- 传统 SPC 控制线 (蓝色虚线) ----
     fig.add_trace(go.Scatter(
         x=[lcl_spc, lcl_spc], y=[0, 1.1], mode='lines',
         line=dict(color='blue', width=2, dash='dash'), name=f'LCL_SPC ({lcl_spc:.3f})',
-        yaxis='y2'  # 用右轴，因为SPC线是基于均值分布的
+        yaxis='y2'
     ))
     fig.add_trace(go.Scatter(
         x=[ucl_spc, ucl_spc], y=[0, 1.1], mode='lines',
@@ -116,16 +122,16 @@ if usl > lsl and sigma_within > 0:
         yaxis='y2'
     ))
     
-    # ---- 单值分布曲线 (蓝色实线，左轴) ----
+    # ---- 单值分布曲线 ----
     fig.add_trace(go.Scatter(
-        x=x_single, y=y_single / max(y_single),  # 归一化到1
+        x=x_single, y=y_single / max(y_single),
         mode='lines', line=dict(color='blue', width=3),
         name='单值分布 N(μ, σ²)', yaxis='y1'
     ))
     
-    # ---- 均值分布曲线 (蓝色虚线，右轴，完整曲线) ----
+    # ---- 均值分布曲线 ----
     fig.add_trace(go.Scatter(
-        x=x_mean, y=y_mean / max(y_mean),  # 归一化到1
+        x=x_mean, y=y_mean / max(y_mean),
         mode='lines', line=dict(color='blue', width=2, dash='dash'),
         name='均值分布 N(μ, σ_x̄²)', yaxis='y2'
     ))
@@ -145,7 +151,7 @@ if usl > lsl and sigma_within > 0:
         yaxis=dict(
             title="单值分布概率密度 (归一化)",
             range=[0, 1.15],
-            showticklabels=False  # 隐藏刻度，因为已归一化
+            showticklabels=False
         ),
         yaxis2=dict(
             title="均值分布概率密度 (归一化)",
@@ -157,14 +163,15 @@ if usl > lsl and sigma_within > 0:
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         height=600,
-        margin=dict(l=40, r=40, t=80, b=40)
+        margin=dict(l=40, r=40, t=80, b=40),
+        font=dict(family="Microsoft YaHei, SimHei, Arial, sans-serif")
     )
     
     # ================= 页面布局 =================
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
     
     with col2:
         st.subheader("📈 结果概览")
@@ -239,7 +246,7 @@ Cpk 要求:      {cpk_req:.2f}
         st.dataframe(df_batch.style.format({
             'k_A': '{:.4f}', 'UCL_A': '{:.4f}',
             'LCL_A': '{:.4f}', '区间宽度': '{:.4f}'
-        }), use_container_width=True, hide_index=True)
+        }), width='stretch', hide_index=True)
         st.caption("💡 n' 越大，k_A 越小，控制限越靠近规格限")
 
 else:
